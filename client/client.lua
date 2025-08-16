@@ -175,9 +175,9 @@ RegisterNetEvent('lootbox:showRewardBox', function(item, amount, rarity, label)
             rarityColor = '~w~' -- White for common
         end
         
-        local title = 'Ammo Crate Opened!'
-        local message = 'You received: ' .. rarityColor .. label .. '~w~ (' .. rarityColor .. rarityText .. '~w~)'
-        
+        local title = 'Crate Opened!'
+        local message = 'You received: ' .. rarityColor .. label .. ' (' .. rarityText .. ')'
+
         GlitchLib.Notifications.Success(title, message, 5000)
     end
     
