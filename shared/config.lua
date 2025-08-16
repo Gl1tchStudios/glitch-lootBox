@@ -1,62 +1,71 @@
 config = {}
 
-config.debug = false -- set to true to enable debug prints
+config.debug = true -- set to true to enable debug prints
+config.useUI = true -- set to false to use classic notifications instead of UI
 
--- simple reward lists for each loot box type
+config.ui = {
+    -- Inventory system configuration - change this to match your inventory
+    inventory = {
+        system = 'ox', -- 'ox', 'qb', 'esx'
+        iconPath = 'nui://ox_inventory/web/images/',
+        iconExtension = '.png',
+        fallbackIcon = 'nui://ox_inventory/web/images/placeholder.png'
+    },
+    
+    -- Rarity colors for UI
+    rarityColors = {
+        common = '#b0c3d9',
+        uncommon = '#5e98d9', 
+        rare = '#4b69ff',
+        ['very-rare'] = '#8847ff',
+        epic = '#d32ce6',
+        legendary = '#eb4b4b'
+    }
+}
+
+-- ████ Loot Box System ████
+
+-- weight is chance for item to drop out of 100
+
 config.lootBoxes = {
     ammocratet1 = {
+        name = 'Ammo Crate T1',
         rewards = {
-            {item = 'ammo-9', min = 50, max = 150, chance = 40},
-            {item = 'ammo-50', min = 50, max = 150, chance = 40},
-            {item = 'ammo-shotgun', min = 15, max = 35, chance = 20}
+            { item = 'ammo-9', label = '9mm Ammo', min = 50, max = 150, rarity = 'common', weight = 40 },
+            { item = 'ammo-50', label = '.50 Cal Ammo', min = 50, max = 150, rarity = 'uncommon', weight = 40 },
+            { item = 'ammo-shotgun', label = 'Shotgun Shells', min = 15, max = 35, rarity = 'rare', weight = 20 }
+        },
+        bonusItems = { -- any items here have an 100% chance to drop
+            { item = 'money', amount = {min = 25, max = 100}, label = 'Cash Find' }
         }
     },
     
     ammocratet2 = {
+        name = 'Ammo Crate T2',
         rewards = {
-            {item = 'ammo-9', min = 100, max = 250, chance = 30},
-            {item = 'ammo-50', min = 100, max = 200, chance = 30},
-            {item = 'ammo-rifle', min = 50, max = 150, chance = 25},
-            {item = 'ammo-shotgun', min = 20, max = 50, chance = 15}
+            { item = 'ammo-9', label = '9mm Ammo', min = 100, max = 250, rarity = 'common', weight = 30 },
+            { item = 'ammo-50', label = '.50 Cal Ammo', min = 100, max = 200, rarity = 'uncommon', weight = 30 },
+            { item = 'ammo-rifle', label = 'Rifle Ammo', min = 50, max = 150, rarity = 'rare', weight = 25 },
+            { item = 'ammo-shotgun', label = 'Shotgun Shells', min = 20, max = 50, rarity = 'epic', weight = 15 }
+        },
+        bonusItems = {
+            { item = 'money', amount = {min = 50, max = 200}, label = 'Cash Find' },
+            { item = 'bandage', amount = 1, label = 'First Aid' }
         }
     },
     
     ammocratet3 = {
+        name = 'Ammo Crate T3',
         rewards = {
-            {item = 'ammo-rifle', min = 150, max = 300, chance = 35},
-            {item = 'ammo-rifle2', min = 100, max = 250, chance = 35},
-            {item = 'ammo-9', min = 200, max = 400, chance = 20},
-            {item = 'ammo-50', min = 150, max = 300, chance = 10}
-        }
-    },
-    
-    -- other loot box types to show the general system
-    medicalbox = {
-        rewards = {
-            {item = 'bandage', min = 5, max = 15, chance = 40},
-            {item = 'firstaid', min = 2, max = 8, chance = 30},
-            {item = 'morphine', min = 1, max = 3, chance = 20},
-            {item = 'defib', min = 1, max = 1, chance = 10}
-        }
-    },
-    
-    weaponcase = {
-        rewards = {
-            {item = 'weapon_pistol', min = 1, max = 1, chance = 30},
-            {item = 'weapon_smg', min = 1, max = 1, chance = 25},
-            {item = 'weapon_rifle', min = 1, max = 1, chance = 20},
-            {item = 'weapon_shotgun', min = 1, max = 1, chance = 15},
-            {item = 'weapon_sniper', min = 1, max = 1, chance = 10}
-        }
-    },
-    
-    supplycrate = {
-        rewards = {
-            {item = 'water', min = 10, max = 25, chance = 30},
-            {item = 'bread', min = 5, max = 15, chance = 30},
-            {item = 'phone', min = 1, max = 1, chance = 20},
-            {item = 'radio', min = 1, max = 1, chance = 15},
-            {item = 'cash', min = 1000, max = 5000, chance = 5}
+            { item = 'ammo-rifle', label = 'Rifle Ammo', min = 150, max = 300, rarity = 'uncommon', weight = 35 },
+            { item = 'ammo-rifle2', label = 'Advanced Rifle Ammo', min = 100, max = 250, rarity = 'rare', weight = 35 },
+            { item = 'ammo-9', label = '9mm Ammo', min = 200, max = 400, rarity = 'common', weight = 20 },
+            { item = 'ammo-50', label = '.50 Cal Ammo', min = 150, max = 300, rarity = 'epic', weight = 10 }
+        },
+        bonusItems = {
+            { item = 'money', amount = {min = 100, max = 300}, label = 'Cash Find' },
+            { item = 'bandage', amount = 2, label = 'Medical Supplies' },
+            { item = 'lockpick', amount = 1, label = 'Tool Bonus' }
         }
     }
 }

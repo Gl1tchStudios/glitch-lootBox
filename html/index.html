@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Loot Box Opening</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="lootbox-container" class="hidden">
+        <!-- Background overlay -->
+        <div class="overlay"></div>
+        
+        <!-- Main container -->
+        <div class="lootbox-ui">
+            <!-- Header -->
+            <div class="header">
+                <h1 id="lootbox-title">Opening Loot Box...</h1>
+                <button id="close-btn" class="close-btn">&times;</button>
+            </div>
+            
+            <!-- Spinner container -->
+            <div class="spinner-container">
+                <div class="spinner-viewport">
+                    <div id="spinner" class="spinner">
+                        <!-- Items will be dynamically added here -->
+                    </div>
+                    <!-- Selection indicator -->
+                    <div class="selection-indicator"></div>
+                </div>
+            </div>
+            
+            <!-- Result display -->
+            <div id="result-container" class="result-container hidden">
+                <div class="result-glow"></div>
+                <div class="result-item">
+                    <div id="result-icon" class="result-icon"></div>
+                    <div class="result-info">
+                        <h2 id="result-name">Item Name</h2>
+                        <div id="result-amount" class="result-amount">x1</div>
+                        <div id="result-rarity" class="result-rarity">Common</div>
+                    </div>
+                </div>
+                <button id="collect-btn" class="collect-btn">Collect Reward</button>
+            </div>
+            
+            <!-- Skip button -->
+            <button id="skip-btn" class="skip-btn hidden">Skip Animation</button>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
