@@ -1,7 +1,7 @@
 fx_version 'cerulean'
 game 'gta5'
 
-author 'Glitch Studios'
+author 'Luma in collaboration with Glitch Studios'
 description 'Simple loot box system like csgo crates with animated UI'
 version '2.0.0'
 

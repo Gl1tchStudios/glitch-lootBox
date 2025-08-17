@@ -25,15 +25,15 @@ config.ui = {
 
 -- ████ Loot Box System ████
 
--- weight is chance for item to drop out of 100
+-- chance is chance for item to drop out of 100
 
 config.lootBoxes = {
     ammocratet1 = {
         name = 'Ammo Crate T1',
         rewards = {
-            { item = 'ammo-9', label = '9mm Ammo', min = 50, max = 150, rarity = 'common', weight = 40 },
-            { item = 'ammo-50', label = '.50 Cal Ammo', min = 50, max = 150, rarity = 'uncommon', weight = 40 },
-            { item = 'ammo-shotgun', label = 'Shotgun Shells', min = 15, max = 35, rarity = 'rare', weight = 20 }
+            { item = 'ammo-9', label = '9mm Ammo', min = 50, max = 150, rarity = 'common', chance = 40 },
+            { item = 'ammo-50', label = '.50 Cal Ammo', min = 50, max = 150, rarity = 'uncommon', chance = 40 },
+            { item = 'ammo-shotgun', label = 'Shotgun Shells', min = 15, max = 35, rarity = 'rare', chance = 20 }
         },
         bonusItems = { -- any items here have an 100% chance to drop
             { item = 'money', amount = {min = 25, max = 100}, label = 'Cash Find' }
@@ -43,10 +43,10 @@ config.lootBoxes = {
     ammocratet2 = {
         name = 'Ammo Crate T2',
         rewards = {
-            { item = 'ammo-9', label = '9mm Ammo', min = 100, max = 250, rarity = 'common', weight = 30 },
-            { item = 'ammo-50', label = '.50 Cal Ammo', min = 100, max = 200, rarity = 'uncommon', weight = 30 },
-            { item = 'ammo-rifle', label = 'Rifle Ammo', min = 50, max = 150, rarity = 'rare', weight = 25 },
-            { item = 'ammo-shotgun', label = 'Shotgun Shells', min = 20, max = 50, rarity = 'epic', weight = 15 }
+            { item = 'ammo-9', label = '9mm Ammo', min = 100, max = 250, rarity = 'common', chance = 30 },
+            { item = 'ammo-50', label = '.50 Cal Ammo', min = 100, max = 200, rarity = 'uncommon', chance = 30 },
+            { item = 'ammo-rifle', label = 'Rifle Ammo', min = 50, max = 150, rarity = 'rare', chance = 25 },
+            { item = 'ammo-shotgun', label = 'Shotgun Shells', min = 20, max = 50, rarity = 'epic', chance = 15 }
         },
         bonusItems = {
             { item = 'money', amount = {min = 50, max = 200}, label = 'Cash Find' },
@@ -57,10 +57,10 @@ config.lootBoxes = {
     ammocratet3 = {
         name = 'Ammo Crate T3',
         rewards = {
-            { item = 'ammo-rifle', label = 'Rifle Ammo', min = 150, max = 300, rarity = 'uncommon', weight = 35 },
-            { item = 'ammo-rifle2', label = 'Advanced Rifle Ammo', min = 100, max = 250, rarity = 'rare', weight = 35 },
-            { item = 'ammo-9', label = '9mm Ammo', min = 200, max = 400, rarity = 'common', weight = 20 },
-            { item = 'ammo-50', label = '.50 Cal Ammo', min = 150, max = 300, rarity = 'epic', weight = 10 }
+            { item = 'ammo-rifle', label = 'Rifle Ammo', min = 150, max = 300, rarity = 'uncommon', chance = 35 },
+            { item = 'ammo-rifle2', label = 'Advanced Rifle Ammo', min = 100, max = 250, rarity = 'rare', chance = 35 },
+            { item = 'ammo-9', label = '9mm Ammo', min = 200, max = 400, rarity = 'common', chance = 20 },
+            { item = 'ammo-50', label = '.50 Cal Ammo', min = 150, max = 300, rarity = 'epic', chance = 10 }
         },
         bonusItems = {
             { item = 'money', amount = {min = 100, max = 300}, label = 'Cash Find' },

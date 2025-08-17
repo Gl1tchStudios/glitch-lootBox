@@ -3,14 +3,13 @@ local isUIOpen = false
 local currentSpinnerItems = {}
 local currentReward = nil
 
-local function debugPrint(message)
+local function debugPrint(message) -- debug messages when enabled
     if config.debug then
         print(message)
     end
 end
 
--- Enhanced force close with mouse cursor fixes
-local function forceCloseUI()
+local function forceCloseUI() -- force close ui and fix mouse cursor
     if not isUIOpen then
         return
     end
@@ -34,7 +33,7 @@ local function forceCloseUI()
     SendNUIMessage({type = 'forceClose'})
 end
 
-Citizen.CreateThread(function()
+Citizen.CreateThread(function() -- wait for glitch abstraction to load
     while GetResourceState('glitch-abstraction') ~= 'started' do
         Citizen.Wait(100)
     end
@@ -50,7 +49,7 @@ Citizen.CreateThread(function()
     debugPrint('^2[loot-box] client loaded^7')
 end)
 
-RegisterNetEvent('glitch-lootBox:openUI', function(spinnerItems, selectedReward)
+RegisterNetEvent('glitch-lootBox:client:openUI', function(spinnerItems, selectedReward) -- open loot box ui
     if isUIOpen then 
         return 
     end
@@ -76,13 +75,13 @@ RegisterNetEvent('glitch-lootBox:openUI', function(spinnerItems, selectedReward)
     end)
 end)
 
-RegisterNUICallback('collectReward', function(data, cb)
-    TriggerServerEvent('glitch-lootBox:collectReward', data.actualWinner)
+RegisterNUICallback('collectReward', function(data, cb) -- collect reward from ui
+    TriggerServerEvent('glitch-lootBox:server:collectReward', data.actualWinner)
     forceCloseUI()
     cb('ok')
 end)
 
-RegisterNUICallback('forceCloseUI', function(data, cb)
+RegisterNUICallback('forceCloseUI', function(data, cb) -- force close ui callback
     cb('ok')
     
     if isUIOpen then
@@ -90,10 +89,9 @@ RegisterNUICallback('forceCloseUI', function(data, cb)
     end
 end)
 
-RegisterNUICallback('requestConfig', function(data, cb)
+RegisterNUICallback('requestConfig', function(data, cb) -- send config to ui
     debugPrint('^3[loot-box] Config requested by UI^7')
     
-    -- Send config to NUI
     SendNUIMessage({
         type = 'updateConfig',
         config = config
@@ -102,7 +100,7 @@ RegisterNUICallback('requestConfig', function(data, cb)
     cb('ok')
 end)
 
-RegisterNUICallback('playSound', function(data, cb)
+RegisterNUICallback('playSound', function(data, cb) -- play sound based on rarity
     local soundName = 'PICK_UP'
     local soundSet = 'HUD_FRONTEND_DEFAULT_SOUNDSET'
     
@@ -124,7 +122,7 @@ RegisterNUICallback('playSound', function(data, cb)
     cb('ok')
 end)
 
-RegisterNetEvent('glitch-lootBox:rewardCollected', function(success)
+RegisterNetEvent('glitch-lootBox:client:rewardCollected', function(success) -- handle reward collection result
     if success then
         PlaySoundFrontend(-1, 'MEDAL_UP', 'HUD_MINI_GAME_SOUNDSET', true)
     else
@@ -141,7 +139,7 @@ RegisterNetEvent('glitch-lootBox:rewardCollected', function(success)
     end
 end)
 
-RegisterNetEvent('lootbox:showReward', function(item, amount)
+RegisterNetEvent('glitch-lootBox:client:showReward', function(item, amount) -- show basic reward notification
     if GlitchLib and GlitchLib.Notifications then
         GlitchLib.Notifications.Success('Loot Box Opened!', 'You got ' .. amount .. 'x ' .. item, 4000)
     end
@@ -149,7 +147,7 @@ RegisterNetEvent('lootbox:showReward', function(item, amount)
     PlaySoundFrontend(-1, 'PICK_UP', 'HUD_FRONTEND_DEFAULT_SOUNDSET', true)
 end)
 
-RegisterNetEvent('lootbox:showBonusReward', function(item, amount, label)
+RegisterNetEvent('glitch-lootBox:client:showBonusReward', function(item, amount, label) -- show bonus reward notification
     if GlitchLib and GlitchLib.Notifications then
         GlitchLib.Notifications.Info('Bonus Item!', 'You received: ' .. amount .. 'x ' .. label, 3000)
     end
@@ -157,22 +155,22 @@ RegisterNetEvent('lootbox:showBonusReward', function(item, amount, label)
     PlaySoundFrontend(-1, 'PICK_UP', 'HUD_FRONTEND_DEFAULT_SOUNDSET', true)
 end)
 
-RegisterNetEvent('lootbox:showRewardBox', function(item, amount, rarity, label)
+RegisterNetEvent('glitch-lootBox:client:showRewardBox', function(item, amount, rarity, label) -- show csgo style reward notification
     if GlitchLib and GlitchLib.Notifications then
         local rarityColor = ''
         local rarityText = rarity:upper()
         if rarity == 'mythic' then
-            rarityColor = '~r~' -- Red
+            rarityColor = '~r~' -- red
         elseif rarity == 'legendary' then
-            rarityColor = '~o~' -- Orange
+            rarityColor = '~o~' -- orange
         elseif rarity == 'epic' then
-            rarityColor = '~p~' -- Purple
+            rarityColor = '~p~' -- purple
         elseif rarity == 'rare' then
-            rarityColor = '~b~' -- Blue
+            rarityColor = '~b~' -- blue
         elseif rarity == 'uncommon' then
-            rarityColor = '~g~' -- Green
+            rarityColor = '~g~' -- green
         else
-            rarityColor = '~w~' -- White for common
+            rarityColor = '~w~' -- white for common
         end
         
         local title = 'Crate Opened!'
@@ -198,7 +196,7 @@ RegisterNetEvent('lootbox:showRewardBox', function(item, amount, rarity, label)
     PlaySoundFrontend(-1, soundName, soundSet, true)
 end)
 
-Citizen.CreateThread(function()
+Citizen.CreateThread(function() -- handle escape key to close ui
     while true do
         Citizen.Wait(100)
         
@@ -211,13 +209,12 @@ Citizen.CreateThread(function()
                 forceCloseUI()
             end
         else
-            Citizen.Wait(1000) -- Reduce load when not needed
+            Citizen.Wait(1000)
         end
     end
 end)
 
--- Background mouse monitor thread
-Citizen.CreateThread(function()
+Citizen.CreateThread(function() -- monitor nui focus in background
     while true do
         Citizen.Wait(500)
         
@@ -231,7 +228,23 @@ Citizen.CreateThread(function()
     end
 end)
 
-AddEventHandler('onResourceStop', function(resourceName)
+RegisterNetEvent('glitch-lootBox:client:notify', function(message, type) -- general notification handler
+    if GlitchLib and GlitchLib.Notifications then
+        if type == 'success' then
+            GlitchLib.Notifications.Notify(message, 'success', 5000)
+        elseif type == 'error' then
+            GlitchLib.Notifications.Notify(message, 'error', 5000)
+        else
+            GlitchLib.Notifications.Notify(message, 'info', 5000)
+        end
+    else
+        SetNotificationTextEntry('STRING')
+        AddTextComponentString(message)
+        DrawNotification(false, false)
+    end
+end)
+
+AddEventHandler('onResourceStop', function(resourceName) -- cleanup when resource stops
     if GetCurrentResourceName() == resourceName then
         if isUIOpen then
             SetNuiFocus(false, false)
