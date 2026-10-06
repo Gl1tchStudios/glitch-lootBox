@@ -3,49 +3,115 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Loot Box Opening</title>
+    <title>Crate</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Rajdhani:wght@500;600;700&display=swap">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div id="lootbox-container" class="hidden">
-        <!-- Background overlay -->
-        <div class="overlay"></div>
-        
-        <!-- Main container -->
-        <div class="lootbox-ui">
-            <!-- Header -->
-            <div class="header">
-                <h1 id="lootbox-title">Opening Loot Box...</h1>
-                <button id="close-btn" class="close-btn">&times;</button>
-            </div>
-            
-            <!-- Spinner container -->
-            <div class="spinner-container">
-                <div class="spinner-viewport">
-                    <div id="spinner" class="spinner">
-                        <!-- Items will be dynamically added here -->
-                    </div>
-                    <!-- Selection indicator -->
-                    <div class="selection-indicator"></div>
+    <div id="app" class="hidden">
+        <div class="backdrop"></div>
+
+        <div id="stage">
+            <!-- 1. Unlock Container -->
+            <section id="view-preview" class="view">
+                <header class="head">
+                    <div class="eyebrow">Unlock Container</div>
+                    <h1 id="pv-name" class="title"></h1>
+                    <div class="rule"></div>
+                </header>
+
+                <div id="pv-art" class="case-art">
+                    <div class="case-glow"></div>
+                    <svg class="case-svg" viewBox="0 0 320 200" aria-hidden="true">
+                        <defs>
+                            <linearGradient id="cs-body" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0" stop-color="#4b525d"/>
+                                <stop offset="1" stop-color="#1d2127"/>
+                            </linearGradient>
+                            <linearGradient id="cs-lid" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0" stop-color="#626b78"/>
+                                <stop offset="1" stop-color="#383e47"/>
+                            </linearGradient>
+                        </defs>
+                        <path d="M128 46 V30 a8 8 0 0 1 8 -8 h48 a8 8 0 0 1 8 8 V46" fill="none" stroke="#14171b" stroke-width="11" stroke-linecap="round"/>
+                        <path d="M128 46 V30 a8 8 0 0 1 8 -8 h48 a8 8 0 0 1 8 8 V46" fill="none" stroke="#5a626e" stroke-width="5" stroke-linecap="round"/>
+                        <rect x="22" y="42" width="276" height="142" rx="12" fill="url(#cs-body)" stroke="#121418" stroke-width="3"/>
+                        <path d="M34 42 h252 a12 12 0 0 1 12 12 v40 h-276 v-40 a12 12 0 0 1 12 -12z" fill="url(#cs-lid)"/>
+                        <rect x="22" y="44" width="276" height="3" fill="#ffffff" opacity=".08"/>
+                        <line x1="23" y1="94" x2="297" y2="94" stroke="#121418" stroke-width="3"/>
+                        <rect x="23" y="146" width="274" height="9" fill="currentColor" opacity=".9"/>
+                        <rect x="52" y="82" width="32" height="26" rx="4" fill="#9ba2ac" stroke="#121418" stroke-width="2"/>
+                        <rect x="236" y="82" width="32" height="26" rx="4" fill="#9ba2ac" stroke="#121418" stroke-width="2"/>
+                        <rect x="60" y="92" width="16" height="4" rx="1" fill="#4b525d"/>
+                        <rect x="244" y="92" width="16" height="4" rx="1" fill="#4b525d"/>
+                        <circle cx="160" cy="124" r="20" fill="#15181d" stroke="currentColor" stroke-width="3"/>
+                        <polygon points="160,111 163.23,119.55 172.36,119.98 165.23,125.7 167.64,134.52 160,129.5 152.36,134.52 154.77,125.7 147.64,119.98 156.77,119.55" fill="currentColor"/>
+                    </svg>
+                    <img id="pv-art-img" class="case-img hidden" alt="">
                 </div>
-            </div>
-            
-            <!-- Result display -->
-            <div id="result-container" class="result-container hidden">
-                <div class="result-glow"></div>
-                <div class="result-item">
-                    <div id="result-icon" class="result-icon"></div>
-                    <div class="result-info">
-                        <h2 id="result-name">Item Name</h2>
-                        <div id="result-amount" class="result-amount">x1</div>
-                        <div id="result-rarity" class="result-rarity">Common</div>
+
+                <div class="label">Contains one of the following</div>
+                <div id="grid" class="grid"></div>
+                <div id="pv-extras" class="extras hidden"></div>
+
+                <footer class="bar">
+                    <div class="bar-info">You have <b id="pv-owned">0</b></div>
+                    <div class="btns">
+                        <button class="btn ghost" data-act="close">Close</button>
+                        <button id="btn-unlock" class="btn go">Unlock Container</button>
                     </div>
+                </footer>
+            </section>
+
+            <!-- 2. Reel -->
+            <section id="view-reel" class="view">
+                <header class="head">
+                    <div class="eyebrow">Unlocking</div>
+                    <h1 id="rl-name" class="title"></h1>
+                    <div class="rule"></div>
+                </header>
+
+                <div class="reel-wrap">
+                    <div id="reel" class="reel">
+                        <div id="strip" class="strip"></div>
+                        <div class="fade l"></div>
+                        <div class="fade r"></div>
+                    </div>
+                    <div class="marker"><i class="tri top"></i><i class="line"></i><i class="tri bot"></i></div>
                 </div>
-                <button id="collect-btn" class="collect-btn">Collect Reward</button>
-            </div>
-            
-            <!-- Skip button -->
-            <button id="skip-btn" class="skip-btn hidden">Skip Animation</button>
+
+                <div id="rl-hint" class="hint"><kbd>SPACE</kbd> skip</div>
+            </section>
+
+            <!-- 3. Reveal -->
+            <section id="view-reveal" class="view">
+                <div class="reveal-fx">
+                    <div class="burst"></div>
+                    <div class="rays"></div>
+                    <div class="flash"></div>
+                </div>
+                <div id="rv-sparks" class="sparks"></div>
+
+                <div class="reveal">
+                    <div class="eyebrow">You received</div>
+                    <div class="reveal-img"><img id="rv-img" alt=""></div>
+                    <div id="rv-name" class="reveal-name"></div>
+                    <div id="rv-grade" class="reveal-grade"></div>
+                    <div class="reveal-bar"></div>
+                    <div id="rv-amount" class="reveal-amount"></div>
+                </div>
+                <div id="rv-extras" class="extras hidden"></div>
+
+                <footer class="bar">
+                    <div id="rv-status" class="bar-info"></div>
+                    <div class="btns">
+                        <button class="btn ghost" data-act="close">Close</button>
+                        <button id="btn-again" class="btn go hidden">Open Another</button>
+                    </div>
+                </footer>
+            </section>
         </div>
     </div>
 

@@ -1,335 +1,521 @@
-local GlitchLib = nil
+-- glitch-lootBox server
+-- The server owns every roll. The crate is taken and the reward decided here before the
+-- reel spins; the client only ever sends back a session token, never an item or amount.
 
-local preSelectedRewards = {}
+local RESOURCE = GetCurrentResourceName()
 
-local function debugPrint(message) -- debug messages when enabled
-    if config.debug then
-        print(message)
-    end
+local sessions = {}   -- [src] = { token, box, stage = 'preview' | 'rolled', reward, bonus }
+local lastAction = {} -- [src] = GetGameTimer() of the last accepted crate request
+local tokenSeq = 0
+local abst = nil
+
+local function dbg(msg, ...)
+    if config.debug then print(('[glitch-lootBox] ' .. msg):format(...)) end
 end
 
-local function getTableKeys(tbl) -- get table keys as strings
-    local keys = {}
-    for k, _ in pairs(tbl) do
-        table.insert(keys, tostring(k))
-    end
-    return keys
+local function warnf(msg, ...)
+    print(('^3[glitch-lootBox]^7 ' .. msg):format(...))
 end
 
-Citizen.CreateThread(function() -- wait for glitch abstraction and setup loot boxes
-    while GetResourceState('glitch-abstraction') ~= 'started' do
-        Citizen.Wait(100)
+local function started(res)
+    return GetResourceState(res) == 'started'
+end
+
+local function getAbst()
+    if abst then return abst end
+    if not started('glitch-abstraction') then return nil end
+    local ok, lib = pcall(function() return exports['glitch-abstraction']:getAbstraction() end)
+    if ok and lib then abst = lib end
+    return abst
+end
+
+local function notify(src, message, kind)
+    TriggerClientEvent('glitch-lootBox:client:notify', src, message, kind or 'info')
+end
+
+-- --------------------------------------------------------------------
+-- Inventory (ox_inventory direct, glitch-abstraction otherwise)
+-- --------------------------------------------------------------------
+
+local Inv = {}
+
+local function abstInv(fn)
+    local a = getAbst()
+    return a and a.Inventory and a.Inventory[fn]
+end
+
+function Inv.count(src, item)
+    if started('ox_inventory') then return exports.ox_inventory:GetItemCount(src, item) or 0 end
+    local fn = abstInv('GetItemCount')
+    return fn and (tonumber(fn(src, item)) or 0) or 0
+end
+
+function Inv.canCarry(src, item, count)
+    if started('ox_inventory') then return exports.ox_inventory:CanCarryItem(src, item, count) and true or false end
+    local fn = abstInv('CanCarryItem')
+    if fn then return fn(src, item, count) ~= false end
+    return true
+end
+
+function Inv.add(src, item, count, metadata)
+    if started('ox_inventory') then return exports.ox_inventory:AddItem(src, item, count, metadata) and true or false end
+    local fn = abstInv('AddItem')
+    return fn and (fn(src, item, count, metadata) and true or false) or false
+end
+
+-- metadata / slot: take that exact crate (heist caches carry metadata.source)
+function Inv.remove(src, item, count, metadata, slot)
+    if started('ox_inventory') then
+        if slot and exports.ox_inventory:RemoveItem(src, item, count, metadata, slot) then return true end
+        return exports.ox_inventory:RemoveItem(src, item, count, metadata) and true or false
     end
-    
-    Citizen.Wait(2000)
-    
-    GlitchLib = exports['glitch-abstraction']:getAbstraction()
-    
-    if not GlitchLib then
-        debugPrint('^1[loot-box] ERROR: GlitchLib is nil after getAbstraction()^7')
+    local fn = abstInv('RemoveItem')
+    return fn and (fn(src, item, count) and true or false) or false
+end
+
+-- First slot holding this crate, so "Open Another" keeps the crate's metadata.
+function Inv.firstSlot(src, item)
+    if not started('ox_inventory') then return nil end
+    local ok, slots = pcall(function() return exports.ox_inventory:Search(src, 'slots', item) end)
+    if not ok or type(slots) ~= 'table' then return nil end
+    for _, s in pairs(slots) do return s end
+end
+
+-- Last resort when the player's inventory is full: put the items on the ground at their feet.
+function Inv.drop(src, items)
+    if #items == 0 or not started('ox_inventory') then return false end
+    local ped = GetPlayerPed(src)
+    if not ped or ped == 0 then return false end
+    local ok, id = pcall(function()
+        return exports.ox_inventory:CustomDrop('Crate', items, GetEntityCoords(ped))
+    end)
+    return ok and id ~= nil
+end
+
+local labelCache = {}
+
+function Inv.label(item)
+    if labelCache[item] then return labelCache[item] end
+    local label
+    if started('ox_inventory') then
+        local ok, data = pcall(function() return exports.ox_inventory:Items(item) end)
+        if ok and type(data) == 'table' then label = data.label end
+    elseif started('qb-core') then
+        local ok, core = pcall(function() return exports['qb-core']:GetCoreObject() end)
+        local data = ok and core and core.Shared and core.Shared.Items and core.Shared.Items[item]
+        if data then label = data.label end
+    end
+    labelCache[item] = label or item
+    return labelCache[item]
+end
+
+-- --------------------------------------------------------------------
+-- Rolling
+-- --------------------------------------------------------------------
+
+local function randInt(a, b)
+    a, b = math.floor(tonumber(a) or 1), math.floor(tonumber(b) or 1)
+    if a > b then a, b = b, a end
+    return math.random(a, b)
+end
+
+-- source: the job a heist cache came from (crate metadata.source).
+--   sources = { jobId = true }   the reward only exists in crates from these jobs
+--   weights = { jobId = 2.0 }    the reward's chance is multiplied for that job
+local function weightOf(def, source)
+    if def.sources and not (source and def.sources[source]) then return 0 end
+    local w = math.max(tonumber(def.chance) or 1, 0)
+    if source and def.weights and def.weights[source] then w = w * def.weights[source] end
+    return w
+end
+
+local function pickWeighted(list, source)
+    local total = 0
+    for i = 1, #list do total = total + weightOf(list[i], source) end
+    if total <= 0 then return list[math.random(#list)] end
+
+    local roll = math.random() * total
+    for i = 1, #list do
+        roll = roll - weightOf(list[i], source)
+        if roll < 0 then return list[i] end
+    end
+    return list[#list]
+end
+
+local function rollAmount(def)
+    if def.min and def.max then return randInt(def.min, def.max) end
+    local a = def.amount
+    if type(a) == 'table' and a.min and a.max then return randInt(a.min, a.max) end
+    if type(a) == 'function' then return math.floor(tonumber(a()) or 1) end
+    return math.floor(tonumber(a) or 1)
+end
+
+local function maxAmount(def)
+    if def.max then return math.floor(def.max) end
+    local a = def.amount
+    if type(a) == 'table' and a.max then return math.floor(a.max) end
+    return math.floor(tonumber(a) or 1)
+end
+
+local function rarityOf(key)
+    return config.rarities[key] and key or 'common'
+end
+
+local function entryOf(def)
+    return { item = def.item, label = def.label or Inv.label(def.item), rarity = rarityOf(def.rarity) }
+end
+
+-- Blueprint / unlock rewards (glitch-crafting): the item is crafting_blueprint
+-- with metadata built by glitch-crafting. nil when crafting is not running.
+local function rewardMeta(def)
+    if not (def.blueprint or def.unlock) then return nil end
+    if not started('glitch-crafting') then return nil end
+    local ok, meta = pcall(function() return exports['glitch-crafting']:BlueprintMetadata(def.blueprint, def.unlock) end)
+    return ok and meta or nil
+end
+
+local function amountText(def)
+    if def.min and def.max then
+        return def.min == def.max and tostring(def.min) or ('%s-%s'):format(def.min, def.max)
+    end
+    local a = def.amount
+    if type(a) == 'table' and a.min and a.max then return ('%s-%s'):format(a.min, a.max) end
+    if type(a) == 'number' then return tostring(a) end
+    return '?'
+end
+
+-- What the preview screen shows. Built once per crate type.
+local viewCache = {}
+
+local function boxView(id, source)
+    local cacheKey = id .. '|' .. tostring(source or '')
+    if viewCache[cacheKey] then return viewCache[cacheKey] end
+    local box = config.lootBoxes[id]
+
+    local total = 0
+    for _, def in ipairs(box.rewards) do total = total + weightOf(def, source) end
+
+    local items = {}
+    for _, def in ipairs(box.rewards) do
+        local w = weightOf(def, source)
+        if w > 0 then
+            local e = entryOf(def)
+            e.amount = amountText(def)
+            e.chance = total > 0 and (w / total * 100) or 0
+            items[#items + 1] = e
+        end
+    end
+    table.sort(items, function(a, b)
+        local ra, rb = config.rarities[a.rarity].order or 0, config.rarities[b.rarity].order or 0
+        if ra ~= rb then return ra < rb end
+        return a.chance > b.chance
+    end)
+
+    local bonus = {}
+    for _, def in ipairs(box.bonusItems or {}) do
+        bonus[#bonus + 1] = { item = def.item, label = def.label or Inv.label(def.item), amount = amountText(def) }
+    end
+
+    viewCache[cacheKey] = {
+        id = id,
+        name = box.name or Inv.label(id),
+        accent = box.accent,
+        image = box.image,
+        items = items,
+        bonus = bonus,
+    }
+    return viewCache[cacheKey]
+end
+
+-- The reel is weighted like the real odds, with the server's winner at winnerIndex.
+local function buildReel(box, reward, source)
+    local reel = {}
+    local winner = config.ui.winnerIndex
+    for i = 1, config.ui.reelLength do
+        if i == winner then
+            reel[i] = { item = reward.item, label = reward.label, rarity = reward.rarity }
+        else
+            reel[i] = entryOf(pickWeighted(box.rewards, source))
+        end
+    end
+    return reel
+end
+
+-- --------------------------------------------------------------------
+-- Sessions
+-- --------------------------------------------------------------------
+
+local function throttled(src, ms)
+    local now = GetGameTimer()
+    if lastAction[src] and now - lastAction[src] < ms then return true end
+    lastAction[src] = now
+    return false
+end
+
+local function newToken()
+    tokenSeq = tokenSeq + 1
+    return tokenSeq
+end
+
+local function describe(reward)
+    local r = config.rarities[reward.rarity]
+    return ('%sx %s (%s)'):format(reward.amount, reward.label, r and r.label or reward.rarity)
+end
+
+-- Takes one crate and decides the reward. Every possible reward has to fit before anything is
+-- touched, so a nearly full inventory can never be used to filter out unwanted rolls.
+-- crate: { metadata, slot } of the crate being opened (nil = any)
+local function roll(src, id, crate)
+    local box = config.lootBoxes[id]
+    if not box then return nil, 'Unknown crate.' end
+    if Inv.count(src, id) < 1 then return nil, ("You don't have a %s."):format(box.name or id) end
+    local source = crate and crate.metadata and crate.metadata.source or nil
+
+    for _, def in ipairs(box.rewards) do
+        if weightOf(def, source) > 0 and not Inv.canCarry(src, def.item, maxAmount(def)) then
+            return nil, 'Make some room in your inventory before opening this.'
+        end
+    end
+
+    if not Inv.remove(src, id, 1, crate and crate.metadata, crate and crate.slot) then return nil, 'Could not open the crate.' end
+
+    local def = pickWeighted(box.rewards, source)
+    local reward = entryOf(def)
+    reward.amount = math.max(rollAmount(def), 1)
+    reward.metadata = rewardMeta(def)
+    if (def.blueprint or def.unlock) and not reward.metadata then
+        warnf('crate %s: could not build the %s reward (is glitch-crafting running?)', id, def.blueprint or def.unlock)
+    end
+
+    local bonus = {}
+    for _, b in ipairs(box.bonusItems or {}) do
+        local n = rollAmount(b)
+        if n > 0 then
+            bonus[#bonus + 1] = { item = b.item, label = b.label or Inv.label(b.item), amount = n }
+        end
+    end
+
+    local s = { token = newToken(), box = id, stage = 'rolled', reward = reward, bonus = bonus, source = source }
+    sessions[src] = s
+    return s
+end
+
+-- Pays out a rolled session exactly once, whatever ends it (reveal, close, timeout, drop).
+local function grant(src, why)
+    local s = sessions[src]
+    if not s or s.stage ~= 'rolled' then return end
+    sessions[src] = nil
+
+    local reward = s.reward
+    local undelivered = {}
+
+    if not Inv.add(src, reward.item, reward.amount, reward.metadata) then
+        undelivered[#undelivered + 1] = { reward.item, reward.amount, reward.metadata }
+    end
+    for _, b in ipairs(s.bonus) do
+        if not Inv.add(src, b.item, b.amount) then
+            undelivered[#undelivered + 1] = { b.item, b.amount }
+        end
+    end
+
+    local dropped = #undelivered > 0 and Inv.drop(src, undelivered)
+    local lost = #undelivered > 0 and not dropped
+
+    dbg('%s (%s) opened %s -> %s [%s]', GetPlayerName(src) or '?', src, s.box, describe(reward), why)
+    if lost then
+        warnf('could not deliver crate loot to %s (%s, %s) after %s: %s', GetPlayerName(src) or '?', src,
+            GetPlayerIdentifierByType(src, 'license') or 'no license', why, json.encode(undelivered))
+    end
+
+    if why == 'dropped' or why == 'shutdown' then return end
+
+    local info = { ok = #undelivered == 0, dropped = dropped and true or false, lost = lost, box = s.box, remaining = Inv.count(src, s.box) }
+    if lost then
+        info.notify = 'Your inventory was full and some crate loot could not be delivered. Contact staff.'
+    elseif dropped then
+        info.notify = 'Your inventory was full, the rest of the crate was dropped at your feet.'
+    elseif why == 'instant' or why == 'timeout' then
+        info.notify = 'You received ' .. describe(reward)
+    end
+    TriggerClientEvent('glitch-lootBox:client:granted', src, s.token, info)
+end
+
+local function startSpin(src, id, crate)
+    local s, err = roll(src, id, crate)
+    if not s then
+        sessions[src] = nil
+        TriggerClientEvent('glitch-lootBox:client:abort', src, err)
         return
     end
-    
-    debugPrint('^3[loot-box] DEBUG: GlitchLib loaded, IsReady = ' .. tostring(GlitchLib.IsReady) .. '^7')
-    
-    while not GlitchLib.IsReady do 
-        Citizen.Wait(100) 
+
+    -- Failsafe: if the client never reports the reveal, pay out anyway.
+    SetTimeout(math.floor(((tonumber(config.ui.spinTime) or 6.5) + 25) * 1000), function()
+        if sessions[src] == s then grant(src, 'timeout') end
+    end)
+
+    local view = boxView(id, s.source)
+    TriggerClientEvent('glitch-lootBox:client:spin', src, {
+        token = s.token,
+        box = { id = id, name = view.name, accent = view.accent },
+        reel = buildReel(config.lootBoxes[id], s.reward, s.source),
+        winner = config.ui.winnerIndex,
+        reward = s.reward,
+        bonus = s.bonus,
+    })
+end
+
+-- data: the used slot from the inventory ({ slot, metadata }), when given
+local function useBox(src, id, data)
+    src = tonumber(src)
+    if not src or src <= 0 or not config.lootBoxes[id] then return end
+    if throttled(src, 500) then return end
+
+    local current = sessions[src]
+    if current and current.stage == 'rolled' then
+        return notify(src, 'You are already opening a crate.', 'error')
     end
-    
-    Citizen.Wait(1000)
-    
-    debugPrint('^3[loot-box] DEBUG: GlitchLib is ready^7')
-    debugPrint('^3[loot-box] DEBUG: Available GlitchLib keys: ' .. table.concat(getTableKeys(GlitchLib), ', ') .. '^7')
-    
-    if GlitchLib.Inventory then
-        debugPrint('^3[loot-box] DEBUG: Available Inventory keys: ' .. table.concat(getTableKeys(GlitchLib.Inventory), ', ') .. '^7')
+
+    local crate = nil
+    if type(data) == 'table' and (data.slot or data.metadata) then
+        crate = { slot = data.slot, metadata = data.metadata or data.info }
     end
-    
-    setupLootBoxes()
-    
-    debugPrint('^2[loot-box] system loaded^7')
+    local source = crate and crate.metadata and crate.metadata.source or nil
+
+    if not config.useUI then
+        local s, err = roll(src, id, crate)
+        if not s then return notify(src, err, 'error') end
+        return grant(src, 'instant')
+    end
+
+    if config.ui.showPreview then
+        local token = newToken()
+        sessions[src] = { token = token, box = id, stage = 'preview', crate = crate }
+        TriggerClientEvent('glitch-lootBox:client:preview', src, { token = token, box = boxView(id, source), owned = Inv.count(src, id) })
+    else
+        startSpin(src, id, crate)
+    end
+end
+
+-- --------------------------------------------------------------------
+-- Client requests (token only)
+-- --------------------------------------------------------------------
+
+RegisterNetEvent('glitch-lootBox:server:unlock', function(token)
+    local src = source
+    local s = sessions[src]
+    if not s or s.stage ~= 'preview' or s.token ~= token then return end
+    startSpin(src, s.box, s.crate)
 end)
 
-function selectUnifiedReward(lootBoxData) -- select reward from loot table
-    local rewards = lootBoxData.rewards
-    if not rewards or #rewards == 0 then
-        return nil
-    end
-    
-    local isRarityBased = rewards[1].chance and rewards[1].rarity
-    
-    if isRarityBased then
-        local totalChance = 0
-        for _, item in ipairs(rewards) do
-            totalChance = totalChance + item.chance
-        end
-        
-        local randomChance = math.random(1, totalChance)
-        local currentChance = 0
-        
-        for _, item in ipairs(rewards) do
-            currentChance = currentChance + item.chance
-            if randomChance <= currentChance then
-                local amount = 1
-                if item.min and item.max then
-                    amount = math.random(item.min, item.max)
-                end
-                return {
-                    item = item.item,
-                    amount = amount,
-                    label = item.label or item.item,
-                    rarity = item.rarity
-                }
-            end
-        end
-        
-        local firstItem = rewards[1]
-        local amount = 1
-        if firstItem.min and firstItem.max then
-            amount = math.random(firstItem.min, firstItem.max)
-        end
-        return {
-            item = firstItem.item,
-            amount = amount,
-            label = firstItem.label or firstItem.item,
-            rarity = firstItem.rarity
-        }
-    else
-        local totalChance = 0
-        for _, reward in pairs(rewards) do
-            totalChance = totalChance + (reward.chance or 10)
-        end
-        
-        local roll = math.random(1, totalChance)
-        local currentChance = 0
-        
-        for _, reward in pairs(rewards) do
-            currentChance = currentChance + (reward.chance or 10)
-            if roll <= currentChance then
-                local amount = math.random(reward.min or 1, reward.max or 1)
-                return {
-                    item = reward.item,
-                    amount = amount,
-                    label = reward.item, 
-                    rarity = 'common'
-                }
-            end
-        end
-        
-        local firstReward = rewards[1] or rewards[next(rewards)]
-        return {
-            item = firstReward.item,
-            amount = math.random(firstReward.min or 1, firstReward.max or 1),
-            label = firstReward.item,
-            rarity = 'common'
-        }
-    end
-end
-
-function generateSpinnerItems(lootBoxData) -- generate items for ui spinner
-    local rewards = lootBoxData.rewards
-    local spinnerItems = {}
-    
-    for i = 1, 60 do
-        local randomReward = rewards[math.random(1, #rewards)]
-        table.insert(spinnerItems, {
-            item = randomReward.item,
-            label = randomReward.label or randomReward.item,
-            rarity = randomReward.rarity or 'common'
-        })
-    end
-    return spinnerItems
-end
-
-local function AddItem(source, item, amount) -- add item to player inventory
-    return GlitchLib.Inventory.AddItem(source, item, amount)
-end
-
-local function RemoveItem(source, item, count) -- remove item from player inventory
-    return GlitchLib.Inventory.RemoveItem(source, item, count)
-end
-
-function giveUnifiedBonusItems(source, lootBoxData) -- give bonus items to player
-    if not lootBoxData.bonusItems then
-        return
-    end
-    
-    for _, bonusItem in ipairs(lootBoxData.bonusItems) do
-        local amount = bonusItem.amount
-        
-        if type(amount) == 'table' and amount.min and amount.max then
-            amount = math.random(amount.min, amount.max)
-        elseif type(amount) == 'function' then
-            amount = amount()
-        end
-        
-        local success = AddItem(source, bonusItem.item, amount)
-        if success then
-            TriggerClientEvent('glitch-lootBox:client:showBonusReward', source, bonusItem.item, amount, bonusItem.label or bonusItem.item)
-        end
-    end
-end
-
-function setupLootBoxes() -- register all loot boxes as usable items
-    if not GlitchLib then
-        debugPrint('^1[loot-box] ERROR: GlitchLib not available^7')
-        return
-    end
-    
-    if not GlitchLib.Framework then
-        debugPrint('^1[loot-box] ERROR: GlitchLib.Framework not available^7')
-        debugPrint('^3[loot-box] DEBUG: Available GlitchLib keys: ' .. table.concat(getTableKeys(GlitchLib), ', ') .. '^7')
-        return
-    end
-    
-    if not GlitchLib.Framework.RegisterUsableItem then
-        debugPrint('^1[loot-box] ERROR: GlitchLib.Framework.RegisterUsableItem not available^7')
-        debugPrint('^3[loot-box] DEBUG: Available Framework keys: ' .. table.concat(getTableKeys(GlitchLib.Framework), ', ') .. '^7')
-        return
-    end
-    
-    debugPrint('^3[loot-box] DEBUG: Using GlitchLib.Framework.RegisterUsableItem^7')
-    
-    local count = 0
-    
-    for lootBoxName, lootBoxData in pairs(config.lootBoxes) do
-        local success, error = pcall(function()
-            GlitchLib.Framework.RegisterUsableItem(lootBoxName, function(source)
-                debugPrint('^2[loot-box] Using ' .. lootBoxName .. ' - source: ' .. tostring(source) .. '^7')
-                
-                local selectedReward = selectUnifiedReward(lootBoxData)
-                if not selectedReward then
-                    debugPrint('^1[loot-box] ERROR: Could not select reward for ' .. lootBoxName .. '^7')
-                    return
-                end
-                
-                preSelectedRewards[source] = {
-                    reward = selectedReward,
-                    lootBoxName = lootBoxName,
-                    lootBoxData = lootBoxData
-                }
-                
-                if config.useUI then
-                    debugPrint('^3[loot-box] DEBUG: Using UI mode for ' .. lootBoxName .. '^7')
-                    
-                    local spinnerItems = generateSpinnerItems(lootBoxData)
-                    
-                    spinnerItems[45] = {
-                        item = selectedReward.item,
-                        label = selectedReward.label,
-                        rarity = selectedReward.rarity
-                    }
-                    
-                    debugPrint('^3[loot-box] DEBUG: Set winning item at position 45: ' .. selectedReward.item .. '^7')
-                    debugPrint('^3[loot-box] DEBUG: Winning item details: ' .. selectedReward.label .. ' (' .. selectedReward.rarity .. ')^7')
-                    
-                    TriggerClientEvent('glitch-lootBox:client:openUI', source, spinnerItems, selectedReward)
-                else
-                    debugPrint('^3[loot-box] DEBUG: Using classic mode for ' .. lootBoxName .. '^7')
-                    
-                    local removed = RemoveItem(source, lootBoxName, 1)
-                    if removed then
-                        -- Give main reward
-                        local added = AddItem(source, selectedReward.item, selectedReward.amount)
-                        if added then
-                            debugPrint('^2[loot-box] SUCCESS: Added reward to inventory (Classic)^7')
-                            
-                            giveUnifiedBonusItems(source, lootBoxData)
-                            
-                            if selectedReward.rarity and selectedReward.rarity ~= 'common' then
-                                TriggerClientEvent('glitch-lootBox:client:showRewardBox', source, selectedReward.item, selectedReward.amount, selectedReward.rarity, selectedReward.label)
-                            else
-                                TriggerClientEvent('glitch-lootBox:client:showReward', source, selectedReward.item, selectedReward.amount)
-                            end
-                        else
-                            print('^1[loot-box] ERROR: Failed to add reward, giving back crate^7')
-                            AddItem(source, lootBoxName, 1)
-                        end
-                    else
-                        debugPrint('^1[loot-box] ERROR: Failed to remove ' .. lootBoxName .. '^7')
-                    end
-                    
-                    preSelectedRewards[source] = nil
-                end
-            end)
-        end)
-        
-        if not success then
-            debugPrint('^1[loot-box] ERROR registering ' .. lootBoxName .. ': ' .. tostring(error) .. '^7')
-        else
-            count = count + 1
-            debugPrint('^2[loot-box] registered unified loot box: ' .. lootBoxName .. '^7')
-        end
-    end
-    
-    debugPrint('^2[loot-box] registered ' .. count .. ' loot box types with unified system^7')
-end
-
-RegisterNetEvent('glitch-lootBox:server:collectReward', function(actualWinner) -- handles reward collection from UI
-    local source = source
-    debugPrint('^3[loot-box] DEBUG: Collect reward event from player ' .. source .. '^7')
-    
-    local rewardData = preSelectedRewards[source]
-    if not rewardData then
-        debugPrint('^1[loot-box] ERROR: No reward data found for player ' .. source .. '^7')
-        TriggerClientEvent('glitch-lootBox:client:rewardCollected', source, false)
-        return
-    end
-    
-    local lootBoxName = rewardData.lootBoxName
-    local lootBoxData = rewardData.lootBoxData
-    
-    local selectedReward = actualWinner or rewardData.reward
-    if not selectedReward then
-        debugPrint('^1[loot-box] ERROR: No reward found for player ' .. source .. '^7')
-        TriggerClientEvent('glitch-lootBox:client:rewardCollected', source, false)
-        return
-    end
-    
-    debugPrint('^6[loot-box] ANIMATION WINNER:^7')
-    debugPrint('  Item: ' .. tostring(selectedReward.item))
-    debugPrint('  Label: ' .. tostring(selectedReward.label))
-    debugPrint('  Rarity: ' .. tostring(selectedReward.rarity))
-    debugPrint('  Amount: ' .. tostring(selectedReward.amount))
-    
-    debugPrint('^3[loot-box] DEBUG: Processing reward: ' .. selectedReward.item .. ' x' .. selectedReward.amount .. '^7')
-    
-    local removed = RemoveItem(source, lootBoxName, 1)
-    if removed then
-        debugPrint('^3[loot-box] DEBUG: Successfully removed ' .. lootBoxName .. '^7')
-        
-        local added = AddItem(source, selectedReward.item, selectedReward.amount)
-        if added then
-            debugPrint('^2[loot-box] SUCCESS: Added animation-determined reward to inventory^7')
-            
-            giveUnifiedBonusItems(source, lootBoxData)
-            
-            TriggerClientEvent('glitch-lootBox:client:rewardCollected', source, true)
-            
-            if selectedReward.rarity and selectedReward.rarity ~= 'common' then
-                debugPrint('^3[loot-box] DEBUG: Sending CSGO notification^7')
-                TriggerClientEvent('glitch-lootBox:client:showRewardBox', source, selectedReward.item, selectedReward.amount, selectedReward.rarity, selectedReward.label)
-            else
-                debugPrint('^3[loot-box] DEBUG: Sending classic notification^7')
-                TriggerClientEvent('glitch-lootBox:client:showReward', source, selectedReward.item, selectedReward.amount)
-            end
-        else
-            debugPrint('^1[loot-box] ERROR: Failed to add reward, giving back crate^7')
-            AddItem(source, lootBoxName, 1)
-            TriggerClientEvent('glitch-lootBox:client:rewardCollected', source, false)
-        end
-    else
-        debugPrint('^1[loot-box] ERROR: Failed to remove ' .. lootBoxName .. '^7')
-        TriggerClientEvent('glitch-lootBox:client:rewardCollected', source, false)
-    end
-    
-    preSelectedRewards[source] = nil
+RegisterNetEvent('glitch-lootBox:server:claim', function(token)
+    local src = source
+    local s = sessions[src]
+    if s and s.stage == 'rolled' and s.token == token then grant(src, 'claim') end
 end)
 
-AddEventHandler('playerDropped', function() -- clean up pre selected rewards when player leaves
-    local source = source
-    if preSelectedRewards[source] then
-        preSelectedRewards[source] = nil
-        debugPrint('^3[loot-box] DEBUG: Cleaned up reward for disconnected player ' .. source .. '^7')
+RegisterNetEvent('glitch-lootBox:server:close', function(token)
+    local src = source
+    local s = sessions[src]
+    if not s or s.token ~= token then return end
+    if s.stage == 'preview' then
+        sessions[src] = nil
+    else
+        grant(src, 'close')
     end
+end)
+
+RegisterNetEvent('glitch-lootBox:server:again', function(id)
+    local src = source
+    if type(id) ~= 'string' or not config.lootBoxes[id] or not config.useUI then return end
+    if sessions[src] or throttled(src, 600) then return end
+    startSpin(src, id, Inv.firstSlot(src, id))
+end)
+
+AddEventHandler('playerDropped', function()
+    local src = source
+    if sessions[src] then grant(src, 'dropped') end
+    sessions[src] = nil
+    lastAction[src] = nil
+end)
+
+AddEventHandler('onResourceStop', function(res)
+    if res ~= RESOURCE then return end
+    for src, s in pairs(sessions) do
+        if s.stage == 'rolled' then grant(src, 'shutdown') end
+    end
+end)
+
+-- --------------------------------------------------------------------
+-- Startup
+-- --------------------------------------------------------------------
+
+local function validate()
+    local ui = config.ui
+    ui.reelLength = math.max(math.floor(tonumber(ui.reelLength) or 56), 24)
+    ui.winnerIndex = math.floor(tonumber(ui.winnerIndex) or (ui.reelLength - 8))
+    if ui.winnerIndex < 12 or ui.winnerIndex > ui.reelLength - 4 then
+        warnf('config.ui.winnerIndex must be between 12 and reelLength - 4, using %s', ui.reelLength - 8)
+        ui.winnerIndex = ui.reelLength - 8
+    end
+
+    for id, box in pairs(config.lootBoxes) do
+        if type(box.rewards) ~= 'table' or #box.rewards == 0 then
+            warnf('crate %s has no rewards and was skipped', id)
+            config.lootBoxes[id] = nil
+        else
+            if started('ox_inventory') and not exports.ox_inventory:Items(id) then
+                warnf('crate item %s is not loaded in ox_inventory (add it to data/items.lua, then restart ox_inventory)', id)
+            end
+            for _, def in ipairs(box.rewards) do
+                if def.blueprint or def.unlock then def.item = 'crafting_blueprint' end
+                if def.rarity and not config.rarities[def.rarity] then
+                    warnf('crate %s: unknown rarity "%s" on %s, treating it as common', id, def.rarity, def.item)
+                end
+                if started('ox_inventory') and not exports.ox_inventory:Items(def.item) then
+                    warnf('crate %s: item %s does not exist in ox_inventory', id, def.item)
+                end
+            end
+        end
+    end
+end
+
+-- Qbox / QBCore usable items also work with ox_inventory (it hands unknown items to the framework).
+-- glitch-abstraction is only a fallback: its ox_inventory path relies on an export ox removed.
+local function registerUsable(name)
+    local handler = function(src, data) useBox(src, name, data) end
+
+    if started('qbx_core') and pcall(function() exports.qbx_core:CreateUseableItem(name, handler) end) then
+        return 'qbx_core'
+    end
+    if started('qb-core') and pcall(function() exports['qb-core']:GetCoreObject().Functions.CreateUseableItem(name, handler) end) then
+        return 'qb-core'
+    end
+    if started('es_extended') and pcall(function() exports.es_extended:getSharedObject().RegisterUsableItem(name, handler) end) then
+        return 'es_extended'
+    end
+    local a = getAbst()
+    if a and a.Framework and a.Framework.RegisterUsableItem then
+        local ok, res = pcall(a.Framework.RegisterUsableItem, name, handler)
+        if ok and res ~= false then return 'glitch-abstraction' end
+    end
+end
+
+CreateThread(function()
+    local deadline = GetGameTimer() + 15000
+    while GetGameTimer() < deadline and not (started('qbx_core') or started('qb-core') or started('es_extended')) do
+        Wait(250)
+    end
+
+    validate()
+
+    local count, via = 0, nil
+    for id in pairs(config.lootBoxes) do
+        local res = registerUsable(id)
+        if res then
+            count, via = count + 1, res
+        else
+            warnf('could not register %s as a usable item', id)
+        end
+    end
+    print(('^2[glitch-lootBox]^7 %s crate type(s) usable via %s'):format(count, via or 'nothing'))
 end)
