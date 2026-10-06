@@ -15,6 +15,8 @@
   <a href="../../archive/refs/heads/main.zip"><img src="https://img.shields.io/badge/DOWNLOAD-GLITCH--LOOTBOX.ZIP-1f6feb?style=for-the-badge&labelColor=555555" alt="Download glitch-lootBox"></a>
 </p>
 
+<img width="800" height="450" alt="demo" src="https://github.com/user-attachments/assets/eb44a325-c00e-4583-af3e-9515e2f1d155" />
+
 <p align="center">
   FiveM, Qbox / QBCore / ESX &middot; <a href="#install">Install</a> &middot; <a href="#config">Config</a> &middot; <a href="#adding-a-crate">Adding a crate</a>
 </p>
