@@ -6,33 +6,99 @@ local uiOpen = false
 local token = nil -- server session for the crate on screen
 local openSeq = 0 -- bumps on every open so stale timers do nothing
 local nuiAck = 0
+local cfgAcked = false -- the page has the config; later messages leave it out
 local abst = nil
 
-local nuiConfig = { ui = config.ui, rarities = config.rarities }
+local inv = config.ui.inventory or {}
+local iconPath = inv.iconPath
+if type(iconPath) ~= 'string' or iconPath == '' then
+    iconPath = GetConvar('inventory:imagepath', 'nui://ox_inventory/web/images')
+end
+if iconPath:sub(-1) ~= '/' then iconPath = iconPath .. '/' end
+local iconExt = inv.iconExtension or '.png'
+local overrides = type(inv.iconOverrides) == 'table' and inv.iconOverrides or {}
+
+local nuiConfig = {
+    ui = {
+        showChances = config.ui.showChances,
+        spinTime = config.ui.spinTime,
+        allowSkip = config.ui.allowSkip,
+        volume = config.ui.volume,
+        inventory = { fallbackIcon = inv.fallbackIcon or false },
+    },
+    rarities = config.rarities,
+    strings = LootBoxUIStrings(),
+}
 
 local function getAbst()
     if abst then return abst end
     if GetResourceState('glitch-abstraction') ~= 'started' then return nil end
-    local ok, lib = pcall(function() return exports['glitch-abstraction']:getAbstraction() end)
-    if ok and lib then abst = lib end
+    local ok, a = pcall(function() return exports['glitch-abstraction']:getAbstraction() end)
+    if ok and a then abst = a end
     return abst
 end
 
 local function notify(message, kind)
+    local title = L('title')
     local a = getAbst()
     local n = a and a.Notifications
     if n then
-        if kind == 'success' and n.Success then return n.Success('Crate', message, 5000) end
-        if kind == 'error' and n.Error then return n.Error('Crate', message, 5000) end
-        if n.Info then return n.Info('Crate', message, 5000) end
+        if kind == 'success' and n.Success then return n.Success(title, message, 5000) end
+        if kind == 'error' and n.Error then return n.Error(title, message, 5000) end
+        if n.Info then return n.Info(title, message, 5000) end
     end
     if GetResourceState('ox_lib') == 'started' then
-        return TriggerEvent('ox_lib:notify', { title = 'Crate', description = message, type = kind == 'info' and 'inform' or kind })
+        return TriggerEvent('ox_lib:notify', { title = title, description = message, type = kind == 'info' and 'inform' or kind })
     end
     BeginTextCommandThefeedPost('STRING')
     AddTextComponentSubstringPlayerName(message)
     EndTextCommandThefeedPostTicker(false, false)
 end
+
+-- --------------------------------------------------------------------
+-- Item icons: config override, then the ox_inventory item image, then iconPath
+-- --------------------------------------------------------------------
+
+local iconCache = {}
+
+local function iconOf(item)
+    local url = iconCache[item]
+    if url then return url end
+    url = overrides[item]
+    if not url and GetResourceState('ox_inventory') == 'started' then
+        local ok, data = pcall(function() return exports.ox_inventory:Items(item) end)
+        local image = ok and type(data) == 'table' and data.client and data.client.image
+        if type(image) == 'string' and image ~= '' then url = image end
+    end
+    url = url or (iconPath .. item .. iconExt)
+    iconCache[item] = url
+    return url
+end
+
+local function addIcons(icons, list)
+    if type(list) ~= 'table' then return end
+    for _, e in ipairs(list) do
+        if type(e) == 'table' and type(e.item) == 'string' then icons[e.item] = iconOf(e.item) end
+    end
+end
+
+local function iconsFor(data)
+    local icons = {}
+    local box = data.box
+    if type(box) == 'table' then
+        if type(box.id) == 'string' then icons[box.id] = iconOf(box.id) end
+        addIcons(icons, box.items)
+        addIcons(icons, box.bonus)
+    end
+    addIcons(icons, data.reel)
+    addIcons(icons, data.bonus)
+    if type(data.reward) == 'table' then addIcons(icons, { data.reward }) end
+    return icons
+end
+
+-- --------------------------------------------------------------------
+-- UI
+-- --------------------------------------------------------------------
 
 local function closeUI()
     if not uiOpen then return end
@@ -56,7 +122,7 @@ local function openUI(action, data)
         end)
     end
 
-    SendNUIMessage({ action = action, data = data, cfg = nuiConfig })
+    SendNUIMessage({ action = action, data = data, icons = iconsFor(data), cfg = not cfgAcked and nuiConfig or nil })
 
     -- If the page never answers, give the player their mouse back instead of trapping them.
     SetTimeout(3000, function()
@@ -64,22 +130,25 @@ local function openUI(action, data)
             if token then TriggerServerEvent('glitch-lootBox:server:close', token) end
             token = nil
             closeUI()
-            notify('The crate screen failed to load.', 'error')
+            notify(L('screen_failed'), 'error')
         end
     end)
 end
 
 RegisterNetEvent('glitch-lootBox:client:preview', function(data)
+    if type(data) ~= 'table' then return end
     token = data.token
     openUI('preview', data)
 end)
 
 RegisterNetEvent('glitch-lootBox:client:spin', function(data)
+    if type(data) ~= 'table' then return end
     token = data.token
     openUI('spin', data)
 end)
 
 RegisterNetEvent('glitch-lootBox:client:granted', function(sessionToken, info)
+    if type(info) ~= 'table' then return end
     if uiOpen and sessionToken == token then
         SendNUIMessage({ action = 'granted', data = info })
     end
@@ -104,6 +173,7 @@ end)
 
 RegisterNUICallback('shown', function(_, cb)
     nuiAck = openSeq
+    cfgAcked = true
     cb(1)
 end)
 
@@ -116,7 +186,7 @@ end)
 
 RegisterNUICallback('reveal', function(data, cb)
     cb(1)
-    local rarity = type(data) == 'table' and config.rarities[data.rarity]
+    local rarity = type(data) == 'table' and type(data.rarity) == 'string' and config.rarities[data.rarity]
     local sound = rarity and rarity.sound
     if type(sound) == 'table' and sound[1] then
         PlaySoundFrontend(-1, sound[1], sound[2] or 'HUD_FRONTEND_DEFAULT_SOUNDSET', true)

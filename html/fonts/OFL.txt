@@ -1,0 +1,3 @@
+Barlow and Barlow Condensed, Copyright The Barlow Project Authors (https://github.com/jpt/barlow).
+Licensed under the SIL Open Font License, Version 1.1 (https://openfontlicense.org).
+The font files may be redistributed with this resource under that licence.

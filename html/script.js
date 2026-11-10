@@ -5,6 +5,7 @@
 
 const RES = typeof GetParentResourceName === 'function' ? GetParentResourceName() : 'glitch-lootBox';
 const $ = (id) => document.getElementById(id);
+const DOT = String.fromCharCode(183); // middle dot separator
 
 const PLACEHOLDER = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">' +
@@ -25,7 +26,35 @@ const cfg = {
     rarities: {
         common: { order: 1, label: 'Common', color: '#b0c3d9' },
     },
+    // English defaults; the client sends the configured locale (locales/*.lua, ui_* keys).
+    strings: {
+        container: 'Container',
+        default_desc: 'You get one of these. Odds are per open.',
+        possible: 'Possible drops',
+        you_have: 'You have',
+        rarest: 'Rarest drop',
+        top_grade: 'Top grade',
+        in_inventory: 'In your inventory: ',
+        close: 'Close',
+        open: 'Open',
+        opening: 'Opening',
+        skip: 'Skip',
+        open_another: 'Open another',
+        open_another_n: 'Open another (%s)',
+        secret: 'Secret item',
+        also_found: 'Also found',
+        always_included: 'Always included',
+        always: 'Always',
+        one_in: '1 in %s',
+        adding: 'Adding to your inventory...',
+        added: 'Added to your inventory',
+        full_dropped: 'Inventory full - dropped at your feet',
+        full_kept: 'Inventory full - kept for your next login',
+    },
 };
+
+// Item icon urls resolved by the client (config override, ox_inventory image, icon path).
+const icons = new Map();
 
 const S = {
     open: false,
@@ -103,6 +132,25 @@ function mergeCfg(next) {
         cfg.ui.inventory = inv;
     }
     if (next.rarities && typeof next.rarities === 'object') cfg.rarities = next.rarities;
+    if (next.strings && typeof next.strings === 'object') {
+        Object.assign(cfg.strings, next.strings);
+        applyStrings();
+    }
+}
+
+function T(key, arg) {
+    const s = String(cfg.strings[key] !== undefined ? cfg.strings[key] : key);
+    return arg === undefined ? s : s.replace('%s', String(arg));
+}
+
+// Static labels in index.html carry data-t="key".
+function applyStrings() {
+    document.querySelectorAll('[data-t]').forEach((node) => { node.textContent = T(node.dataset.t); });
+}
+
+function addIcons(map) {
+    if (!map || typeof map !== 'object') return;
+    Object.keys(map).forEach((k) => { if (typeof map[k] === 'string') icons.set(k, map[k]); });
 }
 
 function fit() {
@@ -117,6 +165,7 @@ function fit() {
 const imgState = new Map(); // url -> true (loads) | false (missing)
 
 function itemUrl(item) {
+    if (icons.has(item)) return icons.get(item);
     const inv = cfg.ui.inventory;
     return `${inv.iconPath}${item}${inv.iconExtension}`;
 }
@@ -287,19 +336,32 @@ function close() {
     hideApp();
 }
 
-function makeCard(entry, withName) {
+// Art on top with the rarity line, name (and optionally rarity + odds) underneath.
+// Mystery grades stay hidden as a striped "?" until they are won.
+function makeCard(entry, meta) {
     const r = rarity(entry.rarity);
     const card = el('div', 'card');
     paint(card, r.color);
+    const art = el('div', 'art');
     if (r.mystery) {
-        card.classList.add('mystery');
-        card.appendChild(el('div', 'star', String.fromCharCode(9733)));
-        return card;
+        card.classList.add('secret');
+        art.appendChild(el('span', null, '?'));
+    } else {
+        const img = el('img');
+        setImg(img, entry.item);
+        art.appendChild(img);
     }
-    const img = el('img');
-    setImg(img, entry.item);
-    card.appendChild(img);
-    if (withName) card.appendChild(el('div', 'card-name', entry.label));
+    card.appendChild(art);
+
+    const info = el('div', 'info');
+    info.appendChild(el('div', 'n', r.mystery ? T('secret') : entry.label));
+    if (meta) {
+        const m = el('div', 'm');
+        m.appendChild(el('em', null, r.label));
+        m.appendChild(el('span', null, meta));
+        info.appendChild(m);
+    }
+    card.appendChild(info);
     return card;
 }
 
@@ -310,7 +372,7 @@ function renderExtras(host, list, found) {
         return;
     }
     host.classList.remove('hidden');
-    host.appendChild(el('div', 'label', found ? 'Also found' : 'Guaranteed extras'));
+    host.appendChild(el('div', 'extras-label', found ? T('also_found') : T('always_included')));
     const chips = el('div', 'chips');
     list.forEach((b) => {
         const chip = el('div', 'chip');
@@ -328,63 +390,110 @@ function renderExtras(host, list, found) {
 
 // ---- 1. preview -----------------------------------------------------
 
-function makeTile(entry, mysteryChance) {
-    const r = rarity(entry.rarity);
-    const tile = el('div', 'tile');
-    paint(tile, r.color);
-    tile.appendChild(makeCard(entry, false));
+function oneIn(chance) {
+    const n = Number(chance) || 0;
+    if (n <= 0) return '-';
+    if (n >= 99.5) return T('always');
+    return T('one_in', Math.max(2, Math.round(100 / n)));
+}
 
-    const info = el('div', 'tile-info');
-    const mystery = mysteryChance !== undefined;
-    info.appendChild(el('div', mystery ? 'tile-name gold' : 'tile-name', mystery ? 'Rare Special Item' : entry.label));
-    info.appendChild(el('div', 'tile-amount', mystery ? 'Exceedingly rare' : `x${entry.amount}`));
-    const meta = el('div', 'tile-meta');
-    meta.appendChild(el('span', 'tile-grade', r.label));
-    if (cfg.ui.showChances) meta.appendChild(el('span', 'tile-chance', pct(mystery ? mysteryChance : entry.chance)));
-    info.appendChild(meta);
-    tile.appendChild(info);
-    return tile;
+function tileMeta(entry, chance) {
+    const parts = [];
+    if (entry.amount !== undefined && String(entry.amount) !== '1') parts.push(`x${entry.amount}`);
+    if (cfg.ui.showChances) parts.push(oneIn(chance));
+    return parts.join(` ${DOT} `) || ' ';
+}
+
+// Box art is the crate's own inventory icon unless the config gives an image.
+function setBoxArt(img, box) {
+    img.onerror = () => { img.onerror = null; img.src = PLACEHOLDER; };
+    img.src = box.image || itemUrl(box.id);
+}
+
+function renderOdds(items) {
+    const bar = $('pv-odds');
+    const key = $('pv-key');
+    bar.textContent = '';
+    key.textContent = '';
+    bar.classList.toggle('hidden', !cfg.ui.showChances);
+    key.classList.toggle('hidden', !cfg.ui.showChances);
+    if (!cfg.ui.showChances) return;
+
+    const tiers = new Map();
+    items.forEach((it) => tiers.set(it.rarity, (tiers.get(it.rarity) || 0) + (Number(it.chance) || 0)));
+    [...tiers.entries()]
+        .sort((a, b) => (rarity(a[0]).order || 0) - (rarity(b[0]).order || 0))
+        .forEach(([k, total]) => {
+            const r = rarity(k);
+            const seg = el('i');
+            paint(seg, r.color);
+            seg.style.flex = String(Math.max(total, 1.2));
+            bar.appendChild(seg);
+            const label = el('span', null, r.label);
+            paint(label, r.color);
+            label.appendChild(el('b', null, pct(total)));
+            key.appendChild(label);
+        });
 }
 
 function renderPreview(data) {
     clearTimers();
     stopSpin();
-    S.box = data.box;
+    const box = data.box;
+    S.box = box;
     S.busy = false;
-    setAccent(data.box.accent);
-    $('pv-name').textContent = data.box.name;
+    setAccent(box.accent);
 
-    const artImg = $('pv-art-img');
-    const svg = document.querySelector('#pv-art .case-svg');
-    if (data.box.image) {
-        artImg.src = data.box.image;
-        artImg.classList.remove('hidden');
-        svg.classList.add('hidden');
-    } else {
-        artImg.classList.add('hidden');
-        svg.classList.remove('hidden');
+    const crumb = $('pv-crumb');
+    crumb.textContent = T('container');
+    if (box.category) {
+        crumb.appendChild(document.createTextNode(` ${DOT} `));
+        crumb.appendChild(el('b', null, box.category));
     }
+    $('pv-name').textContent = box.name;
+    $('pv-desc').textContent = box.description || T('default_desc');
+    setBoxArt($('pv-art'), box);
+    setBoxArt($('pv-mini'), box);
 
-    // Mystery grades collapse into one gold "Rare Special Item" tile, like CS2.
+    // Mystery grades collapse into one secret tile, like CS2.
+    const items = asArray(box.items);
     const frag = document.createDocumentFragment();
     const mystery = new Map();
-    asArray(data.box.items).forEach((it) => {
+    let count = 0;
+    let rarest = null;
+    items.forEach((it) => {
+        const c = Number(it.chance) || 0;
+        if (!rarest || c < rarest.chance) rarest = { chance: c, rarity: it.rarity };
         if (rarity(it.rarity).mystery) {
             const m = mystery.get(it.rarity) || { entry: it, chance: 0 };
-            m.chance += Number(it.chance) || 0;
+            m.chance += c;
             mystery.set(it.rarity, m);
         } else {
-            frag.appendChild(makeTile(it));
+            frag.appendChild(makeCard(it, tileMeta(it, c)));
+            count++;
         }
     });
-    mystery.forEach((m) => frag.appendChild(makeTile(m.entry, m.chance)));
+    mystery.forEach((m) => {
+        frag.appendChild(makeCard(m.entry, tileMeta({}, m.chance)));
+        count++;
+    });
     const grid = $('grid');
     grid.textContent = '';
     grid.scrollTop = 0;
+    grid.classList.toggle('dense', count > 12);
     grid.appendChild(frag);
 
-    renderExtras($('pv-extras'), asArray(data.box.bonus), false);
-    $('pv-owned').textContent = `${data.owned || 0}x`;
+    renderOdds(items);
+    renderExtras($('pv-extras'), asArray(box.bonus), false);
+
+    const owned = Number(data.owned) || 0;
+    $('pv-count').textContent = String(items.length);
+    $('pv-have').textContent = String(owned);
+    $('pv-rare-label').textContent = cfg.ui.showChances ? T('rarest') : T('top_grade');
+    $('pv-rare').textContent = !rarest ? '-' : (cfg.ui.showChances ? oneIn(rarest.chance) : rarity(rarest.rarity).label);
+    const ownedText = $('pv-owned');
+    ownedText.textContent = T('in_inventory');
+    ownedText.appendChild(el('b', null, String(owned)));
     $('btn-unlock').disabled = false;
     setView('preview');
 }
@@ -435,7 +544,7 @@ async function startSpin(data) {
     strip.style.transform = 'translate3d(0px, 0, 0)';
     strip.textContent = '';
     const frag = document.createDocumentFragment();
-    reel.forEach((entry) => frag.appendChild(makeCard(entry, true)));
+    reel.forEach((entry) => frag.appendChild(makeCard(entry)));
     strip.appendChild(frag);
     setView('reel');
 
@@ -462,7 +571,7 @@ function spinReel(reel, win) {
     // Keep the right half of the reel filled when it stops (wide screens, short reels).
     const needAfter = Math.ceil(center / pitch) + 1;
     for (let have = reel.length - win - 1, j = 0; have < needAfter; have++, j++) {
-        strip.appendChild(makeCard(reel[j % Math.max(1, win)], true));
+        strip.appendChild(makeCard(reel[j % Math.max(1, win)]));
     }
 
     S.winEl = strip.children[win];
@@ -549,11 +658,11 @@ function showReveal() {
     $('rv-grade').textContent = r.label;
     $('rv-amount').textContent = `x${reward.amount}`;
     renderExtras($('rv-extras'), asArray(S.spin.bonus), true);
-    sparks((r.order || 0) >= 5);
+    sparks((r.order || 0) >= 6);
 
     const status = $('rv-status');
     status.className = 'bar-info';
-    status.textContent = 'Adding to your inventory...';
+    status.textContent = T('adding');
     $('btn-again').classList.add('hidden');
     setView('reveal');
 
@@ -566,20 +675,20 @@ function applyGranted(info) {
     if (!S.revealed || !info) return;
 
     const status = $('rv-status');
-    if (info.lost) {
+    if (info.kept) {
         status.className = 'bar-info bad';
-        status.textContent = 'Inventory full - contact staff';
+        status.textContent = T('full_kept');
     } else if (info.dropped) {
         status.className = 'bar-info warn';
-        status.textContent = 'Inventory full - dropped at your feet';
+        status.textContent = T('full_dropped');
     } else {
         status.className = 'bar-info good';
-        status.textContent = 'Added to your inventory';
+        status.textContent = T('added');
     }
 
     const again = $('btn-again');
     if (info.remaining > 0 && S.box && info.box === S.box.id) {
-        again.textContent = `Open Another (${info.remaining})`;
+        again.textContent = T('open_another_n', info.remaining);
         again.disabled = false;
         again.classList.remove('hidden');
     }
@@ -634,12 +743,14 @@ window.addEventListener('message', (e) => {
     switch (m.action) {
         case 'preview':
             mergeCfg(m.cfg);
+            addIcons(m.icons);
             openApp();
             renderPreview(m.data);
             post('shown');
             break;
         case 'spin':
             mergeCfg(m.cfg);
+            addIcons(m.icons);
             openApp();
             startSpin(m.data);
             post('shown');
@@ -653,4 +764,5 @@ window.addEventListener('message', (e) => {
     }
 });
 
+applyStrings();
 fit();
