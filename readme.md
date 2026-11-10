@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="https://store.glitchstudios.dev/img/4ac132b831ea34ea.png" alt="Loot Box" width="100%">
+
 # glitch-lootBox
 
 ### CS2 style case opening for FiveM.
