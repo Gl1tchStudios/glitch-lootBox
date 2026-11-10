@@ -20,7 +20,7 @@ Works with Qbox, QBCore or ESX. Needs ox_inventory.
 
 [Features](#features) &middot; [What you need](#what-you-need) &middot; [Install](#install) &middot; [Configuration](#configuration) &middot; [Adding a crate](#adding-a-crate) &middot; [Exports](#exports) &middot; [How it works](#how-it-works) &middot; [Troubleshooting](#troubleshooting)
 
-<img src="docs/demo.gif" alt="Opening a crate" width="720">
+<img src="media/demo.gif" alt="Loot Box in the city" width="100%">
 
 </div>
 
